@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="WXTERM: A retro-style command-line weather station terminal interface powered by the OpenWeather API.">
+<title>WXTERM // weather station</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌤️</text></svg>">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+  :root {
+    --bg: #0a0c0a;
+    --panel: #0f130f;
+    --border: #2a2f25;
+    --amber: #ffb300;
+    --amber-dim: #8a6206;
+    --green: #5fdc7a;
+    --red: #ff5d5d;
+    --text: #c9d1c0;
+    --text-dim: #5f6b58;
+    --font: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    font-family: var(--font);
+    color: var(--text);
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background:
+      radial-gradient(ellipse at top, rgba(255,179,0,0.04), transparent 60%),
+      var(--bg);
+  }
+
+  .crt {
+    width: 100%;
+    max-width: 760px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.4),
+      0 20px 60px rgba(0,0,0,0.6),
+      inset 0 0 40px rgba(255,179,0,0.02);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* scanline overlay */
+  .crt::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.12) 3px
+    );
+    mix-blend-mode: multiply;
+    z-index: 5;
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: #0c0f0c;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+  }
+  .titlebar .dots { display: flex; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #2a2f25; }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .status .led {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+  }
+
+  .screen {
+    height: 480px;
+    overflow-y: auto;
+    padding: 16px 18px;
+    font-size: 13.5px;
+    line-height: 1.65;
+  }
+  .screen::-webkit-scrollbar { width: 8px; }
+  .screen::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .line { white-space: pre-wrap; word-break: break-word; }
+  .dim { color: var(--text-dim); }
+  .amber { color: var(--amber); }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .bold { font-weight: 700; }
+
+  .prompt-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .prompt-label { color: var(--green); white-space: nowrap; }
+  .prompt-label .path { color: var(--amber); }
+
+  .input-line {
+    flex: 1;
+    display: flex;
+    align-items: baseline;
+  }
+  .cmd-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13.5px;
+    caret-color: var(--amber);
+  }
+  .cmd-input::placeholder { color: var(--text-dim); }
+
+  .readout {
+    margin: 10px 0 14px 0;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+    padding: 10px 14px;
+    background: rgba(255,179,0,0.025);
+  }
+  .readout .city {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--amber);
+    letter-spacing: 0.04em;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 18px;
+    margin-top: 8px;
+  }
+  .metric-label { color: var(--text-dim); }
+  .metric-val { color: var(--text); }
+
+  .ascii {
+    color: var(--amber);
+    font-size: 12px;
+    line-height: 1.3;
+    white-space: pre;
+    opacity: 0.9;
+  }
+
+  .blink { animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  a { color: var(--green); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .blink { animation: none; }
+  }
+
+  @media (max-width: 480px) {
+    .grid { grid-template-columns: 1fr; }
+    .screen { height: 70vh; font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="crt" role="application" aria-label="Weather terminal">
+  <div class="titlebar">
+    <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+    <div>WXTERM v1.0 — openweather link</div>
+    <div class="status"><span class="led" id="statusLed"></span><span id="statusText">online</span></div>
+  </div>
+
+  <div class="screen" id="screen" tabindex="0"></div>
+</div>
+
+<script>
+(() => {
+  const screen = document.getElementById('screen');
+  const statusLed = document.getElementById('statusLed');
+  const statusText = document.getElementById('statusText');
+  let API_KEY = localStorage.getItem('WXTERM_API_KEY') || 'b5cd1df937f969975cde8133b3a99d66';
+
+  let history = [];
+  let historyIndex = -1;
+
+  function asciiSun() {
+    return `    \\   /    \n     .-.     \n  ― (   ) ―  \n     \`-'     \n    /   \\    `;
+  }
+  function asciiCloudSun() {
+    return `   \\  /       \n _ /"".-.     \n  \\_(   ).    \n  /(___(__)   `;
+  }
+  function asciiCloud() {
+    return `     .--.     \n  .-(    ).   \n (___.__)__)  `;
+  }
+  function asciiFog() {
+    return ` _ - _ - _ -  \n _ - _ - _ -  \n _ - _ - _ -  `;
+  }
+  function asciiRain(n) {
+    const drops = n === 1 ? "' ' '" : n === 2 ? "'' '' ''" : "'' '' '' ''";
+    return `     .--.     \n  .-(    ).   \n (___.__)__)  \n   ${drops}    `;
+  }
+  function asciiSnow() {
+    return `     .--.     \n  .-(    ).   \n (___.__)__)  \n   *  *  *    `;
+  }
+  function asciiStorm() {
+    return `     .--.     \n  .-(    ).   \n (___.__)__)  \n    //  //    `;
+  }
+
+  // ---- output helpers ----------------------------------------------------
+  function printRaw(html) {
+    const div = document.createElement('div');
+    div.className = 'line';
+    div.innerHTML = html;
+    screen.appendChild(div);
+    screen.scrollTop = screen.scrollHeight;
+  }
+
+  // Escape HTML helper
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function printLine(text, cls = '') {
+    printRaw(`<span class="${cls}">${escapeHtml(text)}</span>`);
+  }
+
+  function setStatus(state) {
+    if (state === 'busy') {
+      statusLed.style.background = 'var(--amber)';
+      statusLed.style.boxShadow = '0 0 6px var(--amber)';
+      statusText.textContent = 'querying…';
+    } else if (state === 'error') {
+      statusLed.style.background = 'var(--red)';
+      statusLed.style.boxShadow = '0 0 6px var(--red)';
+      statusText.textContent = 'link error';
+    } else {
+      statusLed.style.background = 'var(--green)';
+      statusLed.style.boxShadow = '0 0 6px var(--green)';
+      statusText.textContent = 'online';
+    }
+  }
+
+  // ---- weather code mapping ----------------------------------------------
+  function getWxInfo(weatherObj) {
+    const code = weatherObj.id;
+    const desc = weatherObj.description;
+    
+    if (code === 800) return [desc, asciiSun()];
+    if (code === 801) return [desc, asciiSun()];
+    if (code === 802) return [desc, asciiCloudSun()];
+    if (code >= 803 && code <= 804) return [desc, asciiCloud()];
+    if (code >= 701 && code <= 781) return [desc, asciiFog()];
+    if (code >= 300 && code <= 321) return [desc, asciiRain(1)];
+    if (code >= 500 && code <= 504) {
+      if (code === 500 || code === 501) return [desc, asciiRain(2)];
+      return [desc, asciiRain(3)];
+    }
+    if (code >= 520 && code <= 531) return [desc, asciiRain(2)];
+    if (code >= 600 && code <= 622) return [desc, asciiSnow()];
+    if (code >= 200 && code <= 232) return [desc, asciiStorm()];
+    
+    return [desc, asciiCloud()];
+  }
+
+  // ---- core fetch logic: fetch current weather from OpenWeather --------
+  async function fetchWeatherData(city) {
+    const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${API_KEY}&units=metric`;
+    let res;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      throw new Error('NETWORK: could not reach weather service');
+    }
+    if (res.status === 401) {
+      throw new Error('UNAUTHORIZED: invalid API key. (Tip: Use "config key <key>" to set a valid key)');
+    }
+    if (res.status === 404) {
+      throw new Error(`NOT FOUND: no location matching "${city}"`);
+    }
+    if (!res.ok) {
+      throw new Error(`ERROR: server responded ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  function windDirLabel(deg) {
+    if (deg === undefined) return '';
+    const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    return dirs[Math.round(deg / 22.5) % 16];
+  }
+
+  function renderReadout(data) {
+    const weatherObj = data.weather[0] || { id: 800, description: 'clear sky' };
+    const [desc, icon] = getWxInfo(weatherObj);
+    const locationLine = [data.name, data.sys.country].filter(Boolean).join(', ');
+
+    const div = document.createElement('div');
+    div.className = 'readout';
+    div.innerHTML = `
+      <div class="city">${escapeHtml(locationLine.toUpperCase())}</div>
+      <div class="dim">${escapeHtml(desc)} · lat ${data.coord.lat.toFixed(2)}, lon ${data.coord.lon.toFixed(2)}</div>
+      <div style="display:flex; gap:18px; align-items:flex-start; margin-top:8px; flex-wrap:wrap;">
+        <div class="ascii">${escapeHtml(icon)}</div>
+        <div class="grid">
+          <div class="metric-label">temp</div><div class="metric-val amber bold">${data.main.temp.toFixed(1)}°C</div>
+          <div class="metric-label">feels like</div><div class="metric-val">${data.main.feels_like.toFixed(1)}°C</div>
+          <div class="metric-label">humidity</div><div class="metric-val">${data.main.humidity}%</div>
+          <div class="metric-label">wind</div><div class="metric-val">${(data.wind.speed * 3.6).toFixed(1)} km/h ${windDirLabel(data.wind.deg)}</div>
+        </div>
+      </div>
+    `;
+    screen.appendChild(div);
+    screen.scrollTop = screen.scrollHeight;
+  }
+
+  // ---- command handling ---------------------------------------------------
+  async function runWeather(city) {
+    if (!city) {
+      printLine('usage: weather <city name>', 'dim');
+      return;
+    }
+    setStatus('busy');
+    printLine(`resolving "${city}"...`, 'dim');
+    try {
+      const data = await fetchWeatherData(city);
+      renderReadout(data);
+      setStatus('ok');
+    } catch (err) {
+      printLine(`ERROR: ${err.message}`, 'red');
+      setStatus('error');
+      setTimeout(() => setStatus('ok'), 2000);
+    }
+  }
+
+  function printHelp() {
+    printLine('available commands:', 'green');
+    printLine('  weather <city>     fetch current conditions for a city', 'dim');
+    printLine('  config key <key>   set/save your OpenWeather API key', 'dim');
+    printLine('  config show        display the current API key in use', 'dim');
+    printLine('  config clear       reset to default API key', 'dim');
+    printLine('  clear              clear the screen', 'dim');
+    printLine('  help               show this message', 'dim');
+    printLine('  (or just type a city name)', 'dim');
+  }
+
+  function clearScreen() {
+    screen.innerHTML = '';
+  }
+
+  async function handleCommand(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    history.push(trimmed);
+    historyIndex = history.length;
+
+    printRaw(`<span class="green">guest@wx</span><span class="dim">:</span><span class="amber">~</span><span class="dim">$</span> ${escapeHtml(trimmed)}`);
+
+    const [cmd, ...rest] = trimmed.split(' ');
+    const arg = rest.join(' ');
+
+    const cmdLower = cmd.toLowerCase();
+
+    if (cmdLower === 'help') {
+      printHelp();
+    } else if (cmdLower === 'clear') {
+      clearScreen();
+    } else if (cmdLower === 'config') {
+      const subCmd = rest[0] ? rest[0].toLowerCase() : '';
+      const val = rest.slice(1).join(' ');
+      if (subCmd === 'key' && val) {
+        API_KEY = val;
+        localStorage.setItem('WXTERM_API_KEY', val);
+        printLine('API key updated and saved to localStorage.', 'green');
+      } else if (subCmd === 'show') {
+        const masked = API_KEY.length > 8 ? `${API_KEY.slice(0, 4)}...${API_KEY.slice(-4)}` : API_KEY;
+        printLine(`Current API Key: ${masked}`, 'amber');
+      } else if (subCmd === 'clear') {
+        localStorage.removeItem('WXTERM_API_KEY');
+        API_KEY = 'b5cd1df937f969975cde8133b3a99d66';
+        printLine('Custom API key cleared. Reset to default key.', 'dim');
+      } else {
+        printLine('usage:', 'dim');
+        printLine('  config key <key>   save a custom API key', 'dim');
+        printLine('  config show        display current API key', 'dim');
+        printLine('  config clear       reset to default key', 'dim');
+      }
+    } else if (cmdLower === 'weather') {
+      await runWeather(arg);
+    } else {
+      // treat bare input as a city name
+      await runWeather(trimmed);
+    }
+  }
+
+  // ---- input wiring ---------------------------------------------------
+  function buildInputRow() {
+    const row = document.createElement('div');
+    row.className = 'prompt-row';
+    row.innerHTML = `
+      <span class="prompt-label"><span class="green">guest@wx</span><span class="dim">:</span><span class="path">~</span><span class="dim">$</span></span>
+      <span class="input-line">
+        <input class="cmd-input" id="cmdInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="type a city name and hit enter…" aria-label="weather terminal command input">
+      </span>
+    `;
+    screen.appendChild(row);
+    screen.scrollTop = screen.scrollHeight;
+
+    const input = row.querySelector('#cmdInput');
+    input.focus();
+
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const val = input.value;
+        input.value = '';
+        input.disabled = true;
+        await handleCommand(val);
+        input.disabled = false;
+        // move this row to bottom by creating a fresh one
+        row.remove();
+        buildInputRow();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (historyIndex > 0) {
+          historyIndex--;
+          input.value = history[historyIndex] || '';
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (historyIndex < history.length - 1) {
+          historyIndex++;
+          input.value = history[historyIndex] || '';
+        } else {
+          historyIndex = history.length;
+          input.value = '';
+        }
+      }
+    });
+
+  }
+
+  // ---- boot sequence ----------------------------------------------------
+  async function typeLine(text, cls = '', delay = 12) {
+    const div = document.createElement('div');
+    div.className = `line ${cls}`;
+    screen.appendChild(div);
+    for (let i = 0; i < text.length; i++) {
+      div.textContent += text[i];
+      screen.scrollTop = screen.scrollHeight;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  async function boot() {
+    setStatus('busy');
+    await typeLine('WXTERM v1.0 — initializing weather link...', 'dim', 8);
+    await new Promise(r => setTimeout(r, 150));
+    await typeLine('connecting to api.openweathermap.org ... OK', 'green', 6);
+    await new Promise(r => setTimeout(r, 100));
+    await typeLine('type a city name to retrieve live conditions. type "help" for commands.', 'dim', 6);
+    printLine('');
+    setStatus('ok');
+    buildInputRow();
+  }
+
+  // Focus the input whenever the terminal screen is clicked
+  screen.addEventListener('click', () => {
+    const input = document.getElementById('cmdInput');
+    if (input && !input.disabled) {
+      input.focus();
+    }
+  });
+
+  boot();
+})();
+</script>
+
+</body>
+</html>
