@@ -189,7 +189,7 @@
 <div class="crt" role="application" aria-label="Weather terminal">
   <div class="titlebar">
     <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-    <div>WXTERM v1.0 — openweather link</div>
+    <div>WXTERM v1.0 — open-meteo link</div>
     <div class="status"><span class="led" id="statusLed"></span><span id="statusText">online</span></div>
   </div>
 
@@ -201,10 +201,34 @@
   const screen = document.getElementById('screen');
   const statusLed = document.getElementById('statusLed');
   const statusText = document.getElementById('statusText');
-  let API_KEY = localStorage.getItem('WXTERM_API_KEY') || 'b5cd1df937f969975cde8133b3a99d66';
 
   let history = [];
   let historyIndex = -1;
+
+  // ---- WMO weather code -> description + ascii icon -------------------
+  const WX_CODES = {
+    0:  ["clear sky", asciiSun()],
+    1:  ["mainly clear", asciiSun()],
+    2:  ["partly cloudy", asciiCloudSun()],
+    3:  ["overcast", asciiCloud()],
+    45: ["fog", asciiFog()],
+    48: ["depositing rime fog", asciiFog()],
+    51: ["light drizzle", asciiRain(1)],
+    53: ["moderate drizzle", asciiRain(1)],
+    55: ["dense drizzle", asciiRain(2)],
+    61: ["slight rain", asciiRain(1)],
+    63: ["moderate rain", asciiRain(2)],
+    65: ["heavy rain", asciiRain(3)],
+    71: ["slight snow", asciiSnow()],
+    73: ["moderate snow", asciiSnow()],
+    75: ["heavy snow", asciiSnow()],
+    80: ["rain showers", asciiRain(2)],
+    81: ["heavy rain showers", asciiRain(3)],
+    82: ["violent rain showers", asciiRain(3)],
+    95: ["thunderstorm", asciiStorm()],
+    96: ["thunderstorm w/ hail", asciiStorm()],
+    99: ["thunderstorm w/ hail", asciiStorm()],
+  };
 
   function asciiSun() {
     return `    \\   /    \n     .-.     \n  ― (   ) ―  \n     \`-'     \n    /   \\    `;
@@ -265,72 +289,71 @@
     }
   }
 
-  // ---- weather code mapping ----------------------------------------------
-  function getWxInfo(weatherObj) {
-    const code = weatherObj.id;
-    const desc = weatherObj.description;
-    
-    if (code === 800) return [desc, asciiSun()];
-    if (code === 801) return [desc, asciiSun()];
-    if (code === 802) return [desc, asciiCloudSun()];
-    if (code >= 803 && code <= 804) return [desc, asciiCloud()];
-    if (code >= 701 && code <= 781) return [desc, asciiFog()];
-    if (code >= 300 && code <= 321) return [desc, asciiRain(1)];
-    if (code >= 500 && code <= 504) {
-      if (code === 500 || code === 501) return [desc, asciiRain(2)];
-      return [desc, asciiRain(3)];
+  // ---- core fetch logic: geocode city -> fetch current weather ----------
+  async function geocodeCity(city) {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`;
+    let res;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      throw new Error('NETWORK: could not reach geocoding service');
     }
-    if (code >= 520 && code <= 531) return [desc, asciiRain(2)];
-    if (code >= 600 && code <= 622) return [desc, asciiSnow()];
-    if (code >= 200 && code <= 232) return [desc, asciiStorm()];
-    
-    return [desc, asciiCloud()];
+    if (!res.ok) {
+      throw new Error(`GEOCODE: server responded ${res.status}`);
+    }
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) {
+      throw new Error(`NOT FOUND: no location matching "${city}"`);
+    }
+    return data.results[0]; // { name, latitude, longitude, country, admin1, timezone }
   }
 
-  // ---- core fetch logic: fetch current weather from OpenWeather --------
-  async function fetchWeatherData(city) {
-    const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${API_KEY}&units=metric`;
+  async function fetchCurrentWeather(lat, lon, timezone) {
+    const params = new URLSearchParams({
+      latitude: lat,
+      longitude: lon,
+      current: 'temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,weather_code',
+      timezone: timezone || 'auto'
+    });
+    const url = `https://api.open-meteo.com/v1/forecast?${params.toString()}`;
     let res;
     try {
       res = await fetch(url);
     } catch (err) {
       throw new Error('NETWORK: could not reach weather service');
     }
-    if (res.status === 401) {
-      throw new Error('UNAUTHORIZED: invalid API key. (Tip: Use "config key <key>" to set a valid key)');
-    }
-    if (res.status === 404) {
-      throw new Error(`NOT FOUND: no location matching "${city}"`);
-    }
     if (!res.ok) {
-      throw new Error(`ERROR: server responded ${res.status}`);
+      throw new Error(`FORECAST: server responded ${res.status}`);
     }
-    return await res.json();
+    const data = await res.json();
+    if (!data.current) {
+      throw new Error('FORECAST: malformed response, no current block');
+    }
+    return data.current;
   }
 
   function windDirLabel(deg) {
-    if (deg === undefined) return '';
     const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
     return dirs[Math.round(deg / 22.5) % 16];
   }
 
-  function renderReadout(data) {
-    const weatherObj = data.weather[0] || { id: 800, description: 'clear sky' };
-    const [desc, icon] = getWxInfo(weatherObj);
-    const locationLine = [data.name, data.sys.country].filter(Boolean).join(', ');
+  function renderReadout(place, current) {
+    const code = current.weather_code;
+    const [desc, icon] = WX_CODES[code] || ['unknown conditions', asciiCloud()];
+    const locationLine = [place.name, place.admin1, place.country].filter(Boolean).join(', ');
 
     const div = document.createElement('div');
     div.className = 'readout';
     div.innerHTML = `
       <div class="city">${escapeHtml(locationLine.toUpperCase())}</div>
-      <div class="dim">${escapeHtml(desc)} · lat ${data.coord.lat.toFixed(2)}, lon ${data.coord.lon.toFixed(2)}</div>
+      <div class="dim">${escapeHtml(desc)} · lat ${place.latitude.toFixed(2)}, lon ${place.longitude.toFixed(2)}</div>
       <div style="display:flex; gap:18px; align-items:flex-start; margin-top:8px; flex-wrap:wrap;">
         <div class="ascii">${escapeHtml(icon)}</div>
         <div class="grid">
-          <div class="metric-label">temp</div><div class="metric-val amber bold">${data.main.temp.toFixed(1)}°C</div>
-          <div class="metric-label">feels like</div><div class="metric-val">${data.main.feels_like.toFixed(1)}°C</div>
-          <div class="metric-label">humidity</div><div class="metric-val">${data.main.humidity}%</div>
-          <div class="metric-label">wind</div><div class="metric-val">${(data.wind.speed * 3.6).toFixed(1)} km/h ${windDirLabel(data.wind.deg)}</div>
+          <div class="metric-label">temp</div><div class="metric-val amber bold">${current.temperature_2m}°C</div>
+          <div class="metric-label">feels like</div><div class="metric-val">${current.apparent_temperature}°C</div>
+          <div class="metric-label">humidity</div><div class="metric-val">${current.relative_humidity_2m}%</div>
+          <div class="metric-label">wind</div><div class="metric-val">${current.wind_speed_10m} km/h ${windDirLabel(current.wind_direction_10m)}</div>
         </div>
       </div>
     `;
@@ -347,8 +370,9 @@
     setStatus('busy');
     printLine(`resolving "${city}"...`, 'dim');
     try {
-      const data = await fetchWeatherData(city);
-      renderReadout(data);
+      const place = await geocodeCity(city);
+      const current = await fetchCurrentWeather(place.latitude, place.longitude, place.timezone);
+      renderReadout(place, current);
       setStatus('ok');
     } catch (err) {
       printLine(`ERROR: ${err.message}`, 'red');
@@ -360,9 +384,6 @@
   function printHelp() {
     printLine('available commands:', 'green');
     printLine('  weather <city>     fetch current conditions for a city', 'dim');
-    printLine('  config key <key>   set/save your OpenWeather API key', 'dim');
-    printLine('  config show        display the current API key in use', 'dim');
-    printLine('  config clear       reset to default API key', 'dim');
     printLine('  clear              clear the screen', 'dim');
     printLine('  help               show this message', 'dim');
     printLine('  (or just type a city name)', 'dim');
@@ -384,33 +405,11 @@
     const [cmd, ...rest] = trimmed.split(' ');
     const arg = rest.join(' ');
 
-    const cmdLower = cmd.toLowerCase();
-
-    if (cmdLower === 'help') {
+    if (cmd.toLowerCase() === 'help') {
       printHelp();
-    } else if (cmdLower === 'clear') {
+    } else if (cmd.toLowerCase() === 'clear') {
       clearScreen();
-    } else if (cmdLower === 'config') {
-      const subCmd = rest[0] ? rest[0].toLowerCase() : '';
-      const val = rest.slice(1).join(' ');
-      if (subCmd === 'key' && val) {
-        API_KEY = val;
-        localStorage.setItem('WXTERM_API_KEY', val);
-        printLine('API key updated and saved to localStorage.', 'green');
-      } else if (subCmd === 'show') {
-        const masked = API_KEY.length > 8 ? `${API_KEY.slice(0, 4)}...${API_KEY.slice(-4)}` : API_KEY;
-        printLine(`Current API Key: ${masked}`, 'amber');
-      } else if (subCmd === 'clear') {
-        localStorage.removeItem('WXTERM_API_KEY');
-        API_KEY = 'b5cd1df937f969975cde8133b3a99d66';
-        printLine('Custom API key cleared. Reset to default key.', 'dim');
-      } else {
-        printLine('usage:', 'dim');
-        printLine('  config key <key>   save a custom API key', 'dim');
-        printLine('  config show        display current API key', 'dim');
-        printLine('  config clear       reset to default key', 'dim');
-      }
-    } else if (cmdLower === 'weather') {
+    } else if (cmd.toLowerCase() === 'weather') {
       await runWeather(arg);
     } else {
       // treat bare input as a city name
@@ -462,6 +461,7 @@
       }
     });
 
+    screen.addEventListener('click', () => input.focus(), { once: true });
   }
 
   // ---- boot sequence ----------------------------------------------------
@@ -480,7 +480,7 @@
     setStatus('busy');
     await typeLine('WXTERM v1.0 — initializing weather link...', 'dim', 8);
     await new Promise(r => setTimeout(r, 150));
-    await typeLine('connecting to api.openweathermap.org ... OK', 'green', 6);
+    await typeLine('connecting to open-meteo.com ... OK', 'green', 6);
     await new Promise(r => setTimeout(r, 100));
     await typeLine('type a city name to retrieve live conditions. type "help" for commands.', 'dim', 6);
     printLine('');
